@@ -223,3 +223,22 @@ body {
 .app.light ::-webkit-scrollbar-thumb:hover {
   background: #a0a0a0;
 }
+
+.menu-items select {
+  background: none;
+  border: 1px solid transparent;
+  color: inherit;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.menu-items select:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.app.light .menu-items select:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}

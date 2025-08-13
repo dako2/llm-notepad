@@ -8,6 +8,19 @@ struct FileResult {
     content: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct LLMRequest {
+    content: String,
+    mode: String,
+    cursor_position: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LLMResponse {
+    content: String,
+    mode: String,
+}
+
 #[tauri::command]
 async fn open_file(app: tauri::AppHandle) -> Result<FileResult, String> {
     let file_path = app
@@ -61,12 +74,57 @@ async fn save_file_as(app: tauri::AppHandle, content: String) -> Result<String, 
     }
 }
 
+#[tauri::command]
+async fn send_to_llm(request: LLMRequest) -> Result<LLMResponse, String> {
+    
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .map_err(|_| "OpenAI API key not found in environment variables")?;
+    
+    let payload = serde_json::json!({
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {
+                "role": "system",
+                "content": format!("You are a helpful text editor assistant. Mode: {}. Respond with only the text that should be inserted/replaced.", request.mode)
+            },
+            {
+                "role": "user", 
+                "content": request.content
+            }
+        ],
+        "max_tokens": 1000
+    });
+    
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+        
+    let json: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        
+    let content = json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+        
+    Ok(LLMResponse {
+        content,
+        mode: request.mode,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![open_file, save_file, save_file_as])
+        .plugin(tauri_plugin_http::init())
+        .invoke_handler(tauri::generate_handler![open_file, save_file, save_file_as, send_to_llm])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -5,6 +5,12 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "dialog:default", 
+    "fs:default",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://api.openai.com/*" }]
+    }
   ]
 }

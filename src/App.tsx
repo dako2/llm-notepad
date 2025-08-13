@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Editor from "@monaco-editor/react";
 import "./App.css";
@@ -9,6 +9,11 @@ interface FileTab {
   content: string;
   isDirty: boolean;
   path?: string;
+}
+
+interface LLMState {
+  isProcessing: boolean;
+  mode: 'edit' | 'append' | 'respond';
 }
 
 function App() {
@@ -22,6 +27,11 @@ function App() {
   ]);
   const [activeTabId, setActiveTabId] = useState("1");
   const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const [llmState, setLLMState] = useState<LLMState>({
+    isProcessing: false,
+    mode: 'edit'
+  });
+  const editorRef = useRef<any>(null);
 
   const activeTab = tabs.find(tab => tab.id === activeTabId);
 
@@ -128,6 +138,79 @@ function App() {
     setTheme(prev => prev === "light" ? "dark" : "light");
   }, []);
 
+  const handleEditorDidMount = useCallback((editor: any, monaco: any) => {
+    editorRef.current = editor;
+    
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL, () => {
+      sendToLLM();
+    });
+  }, []);
+
+  const sendToLLM = useCallback(async () => {
+    if (!editorRef.current || !activeTab || llmState.isProcessing) return;
+    
+    const editor = editorRef.current;
+    const selection = editor.getSelection();
+    const model = editor.getModel();
+    
+    let content = '';
+    let cursorPosition = 0;
+    
+    if (selection && !selection.isEmpty()) {
+      content = model.getValueInRange(selection);
+      cursorPosition = model.getOffsetAt(selection.getStartPosition());
+    } else {
+      content = activeTab.content;
+      cursorPosition = model.getOffsetAt(editor.getPosition());
+    }
+    
+    setLLMState(prev => ({ ...prev, isProcessing: true }));
+    
+    try {
+      const response = await invoke<{content: string, mode: string}>('send_to_llm', {
+        request: {
+          content,
+          mode: llmState.mode,
+          cursor_position: cursorPosition
+        }
+      });
+      
+      const monaco = (window as any).monaco;
+      
+      if (llmState.mode === 'edit' && selection && !selection.isEmpty()) {
+        editor.executeEdits('llm-edit', [{
+          range: selection,
+          text: response.content
+        }]);
+      } else if (llmState.mode === 'append') {
+        const position = editor.getPosition();
+        editor.executeEdits('llm-append', [{
+          range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+          text: response.content
+        }]);
+      } else {
+        const position = editor.getPosition();
+        editor.executeEdits('llm-respond', [{
+          range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+          text: '\n\n' + response.content
+        }]);
+      }
+      
+      setTabs(prevTabs =>
+        prevTabs.map(tab =>
+          tab.id === activeTabId
+            ? { ...tab, content: editor.getValue(), isDirty: true }
+            : tab
+        )
+      );
+      
+    } catch (error) {
+      console.error('LLM request failed:', error);
+    } finally {
+      setLLMState(prev => ({ ...prev, isProcessing: false }));
+    }
+  }, [activeTab, activeTabId, llmState]);
+
   return (
     <div className={`app ${theme}`}>
       <div className="menu-bar">
@@ -135,6 +218,18 @@ function App() {
           <button onClick={createNewTab}>New</button>
           <button onClick={openFile}>Open</button>
           <button onClick={saveFile} disabled={!activeTab}>Save</button>
+          <button onClick={sendToLLM} disabled={!activeTab || llmState.isProcessing}>
+            🤖 {llmState.isProcessing ? 'Processing...' : 'Ask LLM'}
+          </button>
+          <select 
+            value={llmState.mode} 
+            onChange={(e) => setLLMState(prev => ({ ...prev, mode: e.target.value as any }))}
+            disabled={llmState.isProcessing}
+          >
+            <option value="edit">Edit</option>
+            <option value="append">Append</option>
+            <option value="respond">Respond</option>
+          </select>
           <button onClick={toggleTheme}>
             {theme === "light" ? "🌙" : "☀️"}
           </button>
@@ -174,6 +269,7 @@ function App() {
             theme={theme === "dark" ? "vs-dark" : "vs"}
             value={activeTab.content}
             onChange={handleEditorChange}
+            onMount={handleEditorDidMount}
             options={{
               minimap: { enabled: true },
               fontSize: 14,
