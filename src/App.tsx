@@ -206,6 +206,7 @@ function App() {
       
     } catch (error) {
       console.error('LLM request failed:', error);
+      alert(`LLM request failed: ${error}`);
     } finally {
       setLLMState(prev => ({ ...prev, isProcessing: false }));
     }
