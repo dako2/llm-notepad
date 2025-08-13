@@ -103,9 +103,17 @@ async fn send_to_llm(request: LLMRequest) -> Result<LLMResponse, String> {
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {}", e))?;
-        
-    let json: serde_json::Value = response.json().await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    let status = response.status();
+    let response_text = response.text().await
+        .map_err(|e| format!("Failed to read response text: {}", e))?;
+    
+    if !status.is_success() {
+        return Err(format!("OpenAI API error ({}): {}", status, response_text));
+    }
+    
+    let json: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|e| format!("Failed to parse JSON response: {} - Response: {}", e, response_text))?;
         
     let content = json["choices"][0]["message"]["content"]
         .as_str()
