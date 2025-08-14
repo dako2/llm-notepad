@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri_plugin_dialog::{DialogExt};
 use std::fs;
+use log::{info, warn, error, debug};
 
 #[derive(Serialize, Deserialize)]
 struct FileResult {
@@ -32,24 +33,47 @@ async fn open_file(app: tauri::AppHandle) -> Result<FileResult, String> {
     
     match file_path {
         Some(path) => {
-            let path_buf = path.as_path().unwrap();
+            let path_buf = match path.as_path() {
+                Some(p) => p,
+                None => {
+                    error!("Failed to convert file path to PathBuf");
+                    return Err("Invalid file path".to_string());
+                }
+            };
+            info!("Opening file: {}", path_buf.display());
             match fs::read_to_string(&path_buf) {
-                Ok(content) => Ok(FileResult {
-                    path: path_buf.to_string_lossy().to_string(),
-                    content,
-                }),
-                Err(e) => Err(format!("Failed to read file: {}", e)),
+                Ok(content) => {
+                    info!("Successfully read file with {} bytes", content.len());
+                    Ok(FileResult {
+                        path: path_buf.to_string_lossy().to_string(),
+                        content,
+                    })
+                },
+                Err(e) => {
+                    error!("Failed to read file {}: {}", path_buf.display(), e);
+                    Err(format!("Failed to read file: {}", e))
+                },
             }
         }
-        None => Err("No file selected".to_string()),
+        None => {
+            warn!("No file selected by user");
+            Err("No file selected".to_string())
+        },
     }
 }
 
 #[tauri::command]
 async fn save_file(_app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
+    info!("Saving file: {} ({} bytes)", path, content.len());
     match fs::write(&path, content) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to save file: {}", e)),
+        Ok(_) => {
+            info!("Successfully saved file: {}", path);
+            Ok(())
+        },
+        Err(e) => {
+            error!("Failed to save file {}: {}", path, e);
+            Err(format!("Failed to save file: {}", e))
+        },
     }
 }
 
@@ -64,21 +88,42 @@ async fn save_file_as(app: tauri::AppHandle, content: String) -> Result<String, 
     
     match file_path {
         Some(path) => {
-            let path_buf = path.as_path().unwrap();
+            let path_buf = match path.as_path() {
+                Some(p) => p,
+                None => {
+                    error!("Failed to convert save path to PathBuf");
+                    return Err("Invalid file path".to_string());
+                }
+            };
+            info!("Saving file as: {}", path_buf.display());
             match fs::write(&path_buf, &content) {
-                Ok(_) => Ok(path_buf.to_string_lossy().to_string()),
-                Err(e) => Err(format!("Failed to save file: {}", e)),
+                Ok(_) => {
+                    info!("Successfully saved file as: {}", path_buf.display());
+                    Ok(path_buf.to_string_lossy().to_string())
+                },
+                Err(e) => {
+                    error!("Failed to save file {}: {}", path_buf.display(), e);
+                    Err(format!("Failed to save file: {}", e))
+                },
             }
         }
-        None => Err("No file path selected".to_string()),
+        None => {
+            warn!("No file path selected for save as");
+            Err("No file path selected".to_string())
+        },
     }
 }
 
 #[tauri::command]
 async fn send_to_llm(request: LLMRequest) -> Result<LLMResponse, String> {
+    info!("LLM request - Mode: {}, Content length: {}, Cursor position: {}", 
+          request.mode, request.content.len(), request.cursor_position);
     
     let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| "OpenAI API key not found in environment variables")?;
+        .map_err(|_| {
+            error!("OpenAI API key not found in environment variables");
+            "OpenAI API key not found in environment variables"
+        })?;
     
     let payload = serde_json::json!({
         "model": "gpt-3.5-turbo",
@@ -95,6 +140,7 @@ async fn send_to_llm(request: LLMRequest) -> Result<LLMResponse, String> {
         "max_tokens": 1000
     });
     
+    debug!("Sending request to OpenAI API");
     let client = reqwest::Client::new();
     let response = client
         .post("https://api.openai.com/v1/chat/completions")
@@ -102,26 +148,47 @@ async fn send_to_llm(request: LLMRequest) -> Result<LLMResponse, String> {
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
+        .map_err(|e| {
+            error!("HTTP request failed: {}", e);
+            format!("HTTP request failed: {}", e)
+        })?;
     
     let status = response.status();
+    debug!("OpenAI API response status: {}", status);
+    
     let response_text = response.text().await
-        .map_err(|e| format!("Failed to read response text: {}", e))?;
+        .map_err(|e| {
+            error!("Failed to read response text: {}", e);
+            format!("Failed to read response text: {}", e)
+        })?;
     
     if !status.is_success() {
+        error!("OpenAI API error ({}): {}", status, response_text);
         return Err(format!("OpenAI API error ({}): {}", status, response_text));
     }
     
     let json: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| format!("Failed to parse JSON response: {} - Response: {}", e, response_text))?;
-        
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+        .map_err(|e| {
+            error!("Failed to parse JSON response: {} - Response: {}", e, response_text);
+            format!("Failed to parse JSON response: {} - Response: {}", e, response_text)
+        })?;
+    
+    let content = json
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .unwrap_or("");
+    
+    if content.is_empty() {
+        warn!("OpenAI API returned empty content");
+    } else {
+        info!("LLM response received - Content length: {}", content.len());
+    }
         
     Ok(LLMResponse {
-        content,
+        content: content.to_string(),
         mode: request.mode,
     })
 }

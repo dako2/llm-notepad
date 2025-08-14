@@ -14,6 +14,8 @@ interface FileTab {
 interface LLMState {
   isProcessing: boolean;
   mode: 'edit' | 'append' | 'respond';
+  lastRequestTime?: number;
+  processingText?: string;
 }
 
 function App() {
@@ -142,6 +144,7 @@ function App() {
     editorRef.current = editor;
     
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL, () => {
+      console.log('LLM shortcut triggered (Ctrl+Shift+L)');
       sendToLLM();
     });
   }, []);
@@ -159,14 +162,24 @@ function App() {
     if (selection && !selection.isEmpty()) {
       content = model.getValueInRange(selection);
       cursorPosition = model.getOffsetAt(selection.getStartPosition());
+      console.log(`LLM request - Selected text (${content.length} chars):`, content.substring(0, 100) + '...');
     } else {
       content = activeTab.content;
       cursorPosition = model.getOffsetAt(editor.getPosition());
+      console.log(`LLM request - Full document (${content.length} chars)`);
     }
     
-    setLLMState(prev => ({ ...prev, isProcessing: true }));
+    const startTime = Date.now();
+    setLLMState(prev => ({ 
+      ...prev, 
+      isProcessing: true, 
+      lastRequestTime: startTime,
+      processingText: `Processing ${llmState.mode} request...`
+    }));
     
     try {
+      console.log(`Sending LLM request - Mode: ${llmState.mode}, Content length: ${content.length}`);
+      
       const response = await invoke<{content: string, mode: string}>('send_to_llm', {
         request: {
           content,
@@ -175,20 +188,26 @@ function App() {
         }
       });
       
+      const processingTime = Date.now() - startTime;
+      console.log(`LLM response received in ${processingTime}ms - Content length: ${response.content.length}`);
+      
       const monaco = (window as any).monaco;
       
       if (llmState.mode === 'edit' && selection && !selection.isEmpty()) {
+        console.log('Applying LLM edit to selection');
         editor.executeEdits('llm-edit', [{
           range: selection,
           text: response.content
         }]);
       } else if (llmState.mode === 'append') {
+        console.log('Appending LLM response at cursor');
         const position = editor.getPosition();
         editor.executeEdits('llm-append', [{
           range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
           text: response.content
         }]);
       } else {
+        console.log('Adding LLM response as new section');
         const position = editor.getPosition();
         editor.executeEdits('llm-respond', [{
           range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
@@ -204,11 +223,18 @@ function App() {
         )
       );
       
+      console.log('LLM request completed successfully');
+      
     } catch (error) {
-      console.error('LLM request failed:', error);
+      const processingTime = Date.now() - startTime;
+      console.error(`LLM request failed after ${processingTime}ms:`, error);
       alert(`LLM request failed: ${error}`);
     } finally {
-      setLLMState(prev => ({ ...prev, isProcessing: false }));
+      setLLMState(prev => ({ 
+        ...prev, 
+        isProcessing: false, 
+        processingText: undefined 
+      }));
     }
   }, [activeTab, activeTabId, llmState]);
 
@@ -220,7 +246,7 @@ function App() {
           <button onClick={openFile}>Open</button>
           <button onClick={saveFile} disabled={!activeTab}>Save</button>
           <button onClick={sendToLLM} disabled={!activeTab || llmState.isProcessing}>
-            🤖 {llmState.isProcessing ? 'Processing...' : 'Ask LLM'}
+            🤖 {llmState.isProcessing ? (llmState.processingText || 'Processing...') : 'Ask LLM'}
           </button>
           <select 
             value={llmState.mode} 
