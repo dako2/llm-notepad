@@ -1,318 +1,253 @@
-import { useState, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import Editor from "@monaco-editor/react";
-import "./App.css";
+import React, { useState, useEffect, useRef } from 'react';
+import Editor from '@monaco-editor/react';
 
-interface FileTab {
-  id: string;
-  name: string;
-  content: string;
-  isDirty: boolean;
+interface FileData {
   path?: string;
+  content: string;
+  language: string;
+  isModified: boolean;
 }
 
-interface LLMState {
-  isProcessing: boolean;
-  mode: 'edit' | 'append' | 'respond';
-  lastRequestTime?: number;
-  processingText?: string;
+interface ElectronAPI {
+  onMenuNewFile: (callback: () => void) => void;
+  onMenuOpenFile: (callback: (event: any, data: { path: string; content: string }) => void) => void;
+  onMenuSaveFile: (callback: () => void) => void;
+  onMenuSaveAsFile: (callback: () => void) => void;
+  saveFile: (data: { path?: string; content: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
+  removeAllListeners: (channel: string) => void;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: ElectronAPI;
+  }
 }
 
 function App() {
-  const [tabs, setTabs] = useState<FileTab[]>([
-    {
-      id: "1",
-      name: "Untitled-1",
-      content: "// Welcome to LLM Notepad\n// A powerful text editor built with Tauri + Monaco\n\nfunction hello() {\n  console.log('Hello, World!');\n}",
-      isDirty: false,
-    },
-  ]);
-  const [activeTabId, setActiveTabId] = useState("1");
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [llmState, setLLMState] = useState<LLMState>({
-    isProcessing: false,
-    mode: 'edit'
+  const [currentFile, setCurrentFile] = useState<FileData>({
+    content: '// Welcome to Text Editor\n// Start typing or open a file to begin...',
+    language: 'javascript',
+    isModified: false
   });
+  
+  const [editorTheme, setEditorTheme] = useState('vs-dark');
   const editorRef = useRef<any>(null);
 
-  const activeTab = tabs.find(tab => tab.id === activeTabId);
-
-  const handleEditorChange = useCallback((value: string | undefined) => {
-    if (!value || !activeTabId) return;
-    
-    setTabs(prevTabs =>
-      prevTabs.map(tab =>
-        tab.id === activeTabId
-          ? { ...tab, content: value, isDirty: true }
-          : tab
-      )
-    );
-  }, [activeTabId]);
-
-  const createNewTab = useCallback(() => {
-    const newId = Date.now().toString();
-    const newTab: FileTab = {
-      id: newId,
-      name: `Untitled-${tabs.length + 1}`,
-      content: "",
-      isDirty: false,
+  const getLanguageFromPath = (filePath: string): string => {
+    const extension = filePath.split('.').pop()?.toLowerCase();
+    const languageMap: { [key: string]: string } = {
+      'js': 'javascript',
+      'jsx': 'javascript',
+      'ts': 'typescript',
+      'tsx': 'typescript',
+      'py': 'python',
+      'java': 'java',
+      'cpp': 'cpp',
+      'c': 'c',
+      'h': 'c',
+      'html': 'html',
+      'htm': 'html',
+      'css': 'css',
+      'scss': 'scss',
+      'sass': 'sass',
+      'json': 'json',
+      'xml': 'xml',
+      'md': 'markdown',
+      'sql': 'sql',
+      'php': 'php',
+      'rb': 'ruby',
+      'go': 'go',
+      'rs': 'rust',
+      'sh': 'shell',
+      'bash': 'shell',
+      'yml': 'yaml',
+      'yaml': 'yaml',
+      'txt': 'plaintext'
     };
-    setTabs(prevTabs => [...prevTabs, newTab]);
-    setActiveTabId(newId);
-  }, [tabs.length]);
+    return languageMap[extension || ''] || 'plaintext';
+  };
 
-  const closeTab = useCallback((tabId: string) => {
-    setTabs(prevTabs => {
-      const newTabs = prevTabs.filter(tab => tab.id !== tabId);
-      if (newTabs.length === 0) {
-        const newTab: FileTab = {
-          id: Date.now().toString(),
-          name: "Untitled-1",
-          content: "",
-          isDirty: false,
-        };
-        setActiveTabId(newTab.id);
-        return [newTab];
-      }
-      
-      if (tabId === activeTabId) {
-        setActiveTabId(newTabs[0].id);
-      }
-      
-      return newTabs;
-    });
-  }, [activeTabId]);
-
-  const openFile = useCallback(async () => {
-    try {
-      const result = await invoke<{ path: string; content: string }>("open_file");
-      if (result) {
-        const fileName = result.path.split(/[/\\]/).pop() || "Unknown";
-        const newTab: FileTab = {
-          id: Date.now().toString(),
-          name: fileName,
-          content: result.content,
-          isDirty: false,
-          path: result.path,
-        };
-        setTabs(prevTabs => [...prevTabs, newTab]);
-        setActiveTabId(newTab.id);
-      }
-    } catch (error) {
-      console.error("Failed to open file:", error);
-    }
-  }, []);
-
-  const saveFile = useCallback(async () => {
-    if (!activeTab) return;
-    
-    try {
-      if (activeTab.path) {
-        await invoke("save_file", { path: activeTab.path, content: activeTab.content });
-      } else {
-        const path = await invoke<string>("save_file_as", { content: activeTab.content });
-        if (path) {
-          const fileName = path.split(/[/\\]/).pop() || "Unknown";
-          setTabs(prevTabs =>
-            prevTabs.map(tab =>
-              tab.id === activeTabId
-                ? { ...tab, name: fileName, path, isDirty: false }
-                : tab
-            )
-          );
-          return;
-        }
-      }
-      
-      setTabs(prevTabs =>
-        prevTabs.map(tab =>
-          tab.id === activeTabId
-            ? { ...tab, isDirty: false }
-            : tab
-        )
-      );
-    } catch (error) {
-      console.error("Failed to save file:", error);
-    }
-  }, [activeTab, activeTabId]);
-
-  const toggleTheme = useCallback(() => {
-    setTheme(prev => prev === "light" ? "dark" : "light");
-  }, []);
-
-  const handleEditorDidMount = useCallback((editor: any, monaco: any) => {
-    editorRef.current = editor;
-    
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL, () => {
-      console.log('LLM shortcut triggered (Ctrl+Shift+L)');
-      sendToLLM();
-    });
-  }, []);
-
-  const sendToLLM = useCallback(async () => {
-    if (!editorRef.current || !activeTab || llmState.isProcessing) return;
-    
-    const editor = editorRef.current;
-    const selection = editor.getSelection();
-    const model = editor.getModel();
-    
-    let content = '';
-    let cursorPosition = 0;
-    
-    if (selection && !selection.isEmpty()) {
-      content = model.getValueInRange(selection);
-      cursorPosition = model.getOffsetAt(selection.getStartPosition());
-      console.log(`LLM request - Selected text (${content.length} chars):`, content.substring(0, 100) + '...');
-    } else {
-      content = activeTab.content;
-      cursorPosition = model.getOffsetAt(editor.getPosition());
-      console.log(`LLM request - Full document (${content.length} chars)`);
-    }
-    
-    const startTime = Date.now();
-    setLLMState(prev => ({ 
-      ...prev, 
-      isProcessing: true, 
-      lastRequestTime: startTime,
-      processingText: `Processing ${llmState.mode} request...`
-    }));
-    
-    try {
-      console.log(`Sending LLM request - Mode: ${llmState.mode}, Content length: ${content.length}`);
-      
-      const response = await invoke<{content: string, mode: string}>('send_to_llm', {
-        request: {
-          content,
-          mode: llmState.mode,
-          cursor_position: cursorPosition
-        }
-      });
-      
-      const processingTime = Date.now() - startTime;
-      console.log(`LLM response received in ${processingTime}ms - Content length: ${response.content.length}`);
-      
-      const monaco = (window as any).monaco;
-      
-      if (llmState.mode === 'edit' && selection && !selection.isEmpty()) {
-        console.log('Applying LLM edit to selection');
-        editor.executeEdits('llm-edit', [{
-          range: selection,
-          text: response.content
-        }]);
-      } else if (llmState.mode === 'append') {
-        console.log('Appending LLM response at cursor');
-        const position = editor.getPosition();
-        editor.executeEdits('llm-append', [{
-          range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
-          text: response.content
-        }]);
-      } else {
-        console.log('Adding LLM response as new section');
-        const position = editor.getPosition();
-        editor.executeEdits('llm-respond', [{
-          range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
-          text: '\n\n' + response.content
-        }]);
-      }
-      
-      setTabs(prevTabs =>
-        prevTabs.map(tab =>
-          tab.id === activeTabId
-            ? { ...tab, content: editor.getValue(), isDirty: true }
-            : tab
-        )
-      );
-      
-      console.log('LLM request completed successfully');
-      
-    } catch (error) {
-      const processingTime = Date.now() - startTime;
-      console.error(`LLM request failed after ${processingTime}ms:`, error);
-      alert(`LLM request failed: ${error}`);
-    } finally {
-      setLLMState(prev => ({ 
-        ...prev, 
-        isProcessing: false, 
-        processingText: undefined 
+  const handleEditorChange = (value: string | undefined) => {
+    if (value !== undefined) {
+      setCurrentFile(prev => ({
+        ...prev,
+        content: value,
+        isModified: true
       }));
     }
-  }, [activeTab, activeTabId, llmState]);
+  };
+
+  const handleNewFile = () => {
+    setCurrentFile({
+      content: '',
+      language: 'plaintext',
+      isModified: false
+    });
+  };
+
+  const handleOpenFile = (event: any, data: { path: string; content: string }) => {
+    const language = getLanguageFromPath(data.path);
+    setCurrentFile({
+      path: data.path,
+      content: data.content,
+      language,
+      isModified: false
+    });
+  };
+
+  const handleSaveFile = async () => {
+    if (window.electronAPI) {
+      const result = await window.electronAPI.saveFile({
+        path: currentFile.path,
+        content: currentFile.content
+      });
+      
+      if (result.success) {
+        setCurrentFile(prev => ({
+          ...prev,
+          path: result.path,
+          isModified: false
+        }));
+      }
+    }
+  };
+
+  const handleSaveAsFile = async () => {
+    if (window.electronAPI) {
+      const result = await window.electronAPI.saveFile({
+        content: currentFile.content
+      });
+      
+      if (result.success) {
+        const language = getLanguageFromPath(result.path || '');
+        setCurrentFile(prev => ({
+          ...prev,
+          path: result.path,
+          language,
+          isModified: false
+        }));
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.onMenuNewFile(handleNewFile);
+      window.electronAPI.onMenuOpenFile(handleOpenFile);
+      window.electronAPI.onMenuSaveFile(handleSaveFile);
+      window.electronAPI.onMenuSaveAsFile(handleSaveAsFile);
+
+      return () => {
+        window.electronAPI?.removeAllListeners('menu-new-file');
+        window.electronAPI?.removeAllListeners('menu-open-file');
+        window.electronAPI?.removeAllListeners('menu-save-file');
+        window.electronAPI?.removeAllListeners('menu-save-as-file');
+      };
+    }
+  }, [currentFile.path, currentFile.content]);
+
+  const handleEditorDidMount = (editor: any) => {
+    editorRef.current = editor;
+    editor.focus();
+  };
+
+  const getFileName = () => {
+    if (currentFile.path) {
+      return currentFile.path.split('/').pop() || 'Untitled';
+    }
+    return 'Untitled';
+  };
+
+  const getLanguageDisplayName = (lang: string) => {
+    const displayNames: { [key: string]: string } = {
+      'javascript': 'JavaScript',
+      'typescript': 'TypeScript',
+      'python': 'Python',
+      'java': 'Java',
+      'cpp': 'C++',
+      'c': 'C',
+      'html': 'HTML',
+      'css': 'CSS',
+      'scss': 'SCSS',
+      'json': 'JSON',
+      'xml': 'XML',
+      'markdown': 'Markdown',
+      'sql': 'SQL',
+      'php': 'PHP',
+      'ruby': 'Ruby',
+      'go': 'Go',
+      'rust': 'Rust',
+      'shell': 'Shell',
+      'yaml': 'YAML',
+      'plaintext': 'Plain Text'
+    };
+    return displayNames[lang] || lang.toUpperCase();
+  };
 
   return (
-    <div className={`app ${theme}`}>
-      <div className="menu-bar">
-        <div className="menu-items">
-          <button onClick={createNewTab}>New</button>
-          <button onClick={openFile}>Open</button>
-          <button onClick={saveFile} disabled={!activeTab}>Save</button>
-          <button onClick={sendToLLM} disabled={!activeTab || llmState.isProcessing}>
-            🤖 {llmState.isProcessing ? (llmState.processingText || 'Processing...') : 'Ask LLM'}
-          </button>
-          <select 
-            value={llmState.mode} 
-            onChange={(e) => setLLMState(prev => ({ ...prev, mode: e.target.value as any }))}
-            disabled={llmState.isProcessing}
-          >
-            <option value="edit">Edit</option>
-            <option value="append">Append</option>
-            <option value="respond">Respond</option>
-          </select>
-          <button onClick={toggleTheme}>
-            {theme === "light" ? "🌙" : "☀️"}
-          </button>
+    <div className="editor-container">
+      <div className="toolbar">
+        <button onClick={handleNewFile}>
+          New File
+        </button>
+        <button onClick={handleSaveFile} disabled={!currentFile.isModified}>
+          Save
+        </button>
+        <button onClick={handleSaveAsFile}>
+          Save As
+        </button>
+        <button 
+          onClick={() => setEditorTheme(editorTheme === 'vs-dark' ? 'light' : 'vs-dark')}
+        >
+          {editorTheme === 'vs-dark' ? 'Light Theme' : 'Dark Theme'}
+        </button>
+        <div className="file-info">
+          {getFileName()}{currentFile.isModified ? ' •' : ''}
         </div>
       </div>
       
-      <div className="tab-bar">
-        {tabs.map(tab => (
-          <div
-            key={tab.id}
-            className={`tab ${tab.id === activeTabId ? "active" : ""}`}
-            onClick={() => setActiveTabId(tab.id)}
-          >
-            <span className="tab-name">
-              {tab.name}
-              {tab.isDirty && " •"}
-            </span>
-            <button
-              className="tab-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(tab.id);
-              }}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-        <button className="new-tab-btn" onClick={createNewTab}>+</button>
-      </div>
-
-      <div className="editor-container">
-        {activeTab && (
-          <Editor
-            height="100%"
-            language="javascript"
-            theme={theme === "dark" ? "vs-dark" : "vs"}
-            value={activeTab.content}
-            onChange={handleEditorChange}
-            onMount={handleEditorDidMount}
-            options={{
-              minimap: { enabled: true },
-              fontSize: 14,
-              lineNumbers: "on",
-              wordWrap: "on",
-              automaticLayout: true,
-              scrollBeyondLastLine: false,
-              multiCursorModifier: "ctrlCmd",
-              find: {
-                addExtraSpaceOnTop: false,
-                autoFindInSelection: "never",
-                seedSearchStringFromSelection: "always",
-              },
-            }}
-          />
-        )}
+      <Editor
+        height="calc(100vh - 64px)"
+        language={currentFile.language}
+        value={currentFile.content}
+        theme={editorTheme}
+        onChange={handleEditorChange}
+        onMount={handleEditorDidMount}
+        options={{
+          fontSize: 14,
+          fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+          lineNumbers: 'on',
+          roundedSelection: false,
+          scrollBeyondLastLine: false,
+          automaticLayout: true,
+          minimap: { enabled: true },
+          wordWrap: 'on',
+          tabSize: 2,
+          insertSpaces: true,
+          detectIndentation: true,
+          folding: true,
+          foldingStrategy: 'indentation',
+          showFoldingControls: 'always',
+          unfoldOnClickAfterEndOfLine: false,
+          contextmenu: true,
+          mouseWheelZoom: true,
+          multiCursorModifier: 'ctrlCmd',
+          accessibilitySupport: 'auto',
+          find: {
+            addExtraSpaceOnTop: false,
+            autoFindInSelection: 'never',
+            seedSearchStringFromSelection: 'always'
+          }
+        }}
+      />
+      
+      <div className="status-bar">
+        <span>
+          {getLanguageDisplayName(currentFile.language)}
+        </span>
+        <span>
+          {currentFile.path || 'Untitled'}
+        </span>
       </div>
     </div>
   );
