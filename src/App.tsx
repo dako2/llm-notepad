@@ -20,6 +20,9 @@ interface LLMState {
   isStreaming?: boolean;
   streamBuffer?: string;
   streamRequestId?: string;
+  statusMessage?: string;
+  errorMessage?: string;
+  apiKeyStatus?: 'unknown' | 'missing' | 'present';
 }
 
 interface StreamingMessage {
@@ -44,7 +47,10 @@ function App() {
     mode: 'edit',
     isStreaming: false,
     streamBuffer: '',
-    streamRequestId: ''
+    streamRequestId: '',
+    statusMessage: '',
+    errorMessage: '',
+    apiKeyStatus: 'unknown'
   });
   
   const [ghostText, setGhostText] = useState<string>("");
@@ -210,14 +216,18 @@ function App() {
           ...prev,
           isStreaming: true,
           streamBuffer: '',
-          streamRequestId: message.id
+          streamRequestId: message.id,
+          statusMessage: 'LLM streaming started...',
+          errorMessage: '',
+          apiKeyStatus: 'present'
         }));
       } else if (message.type === 'llm_delta' && message.delta) {
         const newBuffer = (llmState.streamBuffer || '') + message.delta;
         setGhostText(newBuffer);
         setLLMState(prev => ({
           ...prev,
-          streamBuffer: newBuffer
+          streamBuffer: newBuffer,
+          statusMessage: `Streaming... (${newBuffer.length} chars received)`
         }));
         
         if (editorRef.current) {
@@ -262,7 +272,9 @@ function App() {
           isProcessing: false,
           isStreaming: false,
           streamBuffer: '',
-          streamRequestId: ''
+          streamRequestId: '',
+          statusMessage: 'LLM response completed successfully',
+          errorMessage: ''
         }));
         
         if (activeTabId) {
@@ -281,6 +293,26 @@ function App() {
       unlisten.then(fn => fn());
     };
   }, [activeTabId, llmState.streamBuffer, updateGhostText]);
+  
+  useEffect(() => {
+    const checkApiKeyStatus = async () => {
+      try {
+        const hasApiKey = await invoke<boolean>('check_api_key_status');
+        setLLMState(prev => ({
+          ...prev,
+          apiKeyStatus: hasApiKey ? 'present' : 'missing'
+        }));
+      } catch (error) {
+        console.error('Failed to check API key status:', error);
+        setLLMState(prev => ({
+          ...prev,
+          apiKeyStatus: 'unknown'
+        }));
+      }
+    };
+    
+    checkApiKeyStatus();
+  }, []);
   
   const sendToLLMStreaming = useCallback(async () => {
     if (!editorRef.current || !activeTab || llmState.isProcessing || llmState.isStreaming) return;
@@ -305,7 +337,12 @@ function App() {
     
     if (!content.trim()) return;
     
-    setLLMState(prev => ({ ...prev, isProcessing: true }));
+    setLLMState(prev => ({ 
+      ...prev, 
+      isProcessing: true,
+      statusMessage: `Sending ${llmState.mode} request to LLM...`,
+      errorMessage: ''
+    }));
     
     try {
       const instruction = llmState.mode === 'edit' ? 'polish and improve' :
@@ -322,12 +359,18 @@ function App() {
       });
     } catch (error) {
       console.error('Streaming LLM error:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isApiKeyError = errorMsg.includes('API key') || errorMsg.includes('401') || errorMsg.includes('Unauthorized');
+      
       setLLMState(prev => ({ 
         ...prev, 
         isProcessing: false,
         isStreaming: false,
         streamBuffer: '',
-        streamRequestId: ''
+        streamRequestId: '',
+        statusMessage: '',
+        errorMessage: isApiKeyError ? 'API key missing or invalid. Please set OPENAI_API_KEY environment variable.' : `LLM Error: ${errorMsg}`,
+        apiKeyStatus: isApiKeyError ? 'missing' : prev.apiKeyStatus
       }));
       setIsStreamingActive(false);
       setGhostText("");
@@ -363,6 +406,32 @@ function App() {
             {theme === "light" ? "🌙" : "☀️"}
           </button>
         </div>
+        
+        {/* LLM Status Display */}
+        {(llmState.statusMessage || llmState.errorMessage || llmState.apiKeyStatus === 'missing') && (
+          <div className="llm-status-bar">
+            {llmState.errorMessage && (
+              <div className="status-error">
+                ❌ {llmState.errorMessage}
+              </div>
+            )}
+            {llmState.statusMessage && !llmState.errorMessage && (
+              <div className="status-info">
+                ℹ️ {llmState.statusMessage}
+              </div>
+            )}
+            {llmState.apiKeyStatus === 'missing' && !llmState.errorMessage && (
+              <div className="status-warning">
+                ⚠️ OpenAI API key not configured. Set OPENAI_API_KEY environment variable to use LLM features.
+              </div>
+            )}
+            {llmState.apiKeyStatus === 'unknown' && !llmState.errorMessage && !llmState.statusMessage && (
+              <div className="status-info">
+                💡 Press Ctrl+Shift+L or click 🤖 Ask LLM to test LLM functionality
+              </div>
+            )}
+          </div>
+        )}
       </div>
       
       <div className="tab-bar">
