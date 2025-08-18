@@ -215,6 +215,14 @@ async fn send_to_llm(request: LLMRequest) -> Result<LLMResponse, String> {
 }
 
 #[tauri::command]
+async fn check_api_key_status() -> Result<bool, String> {
+    match std::env::var("OPENAI_API_KEY") {
+        Ok(key) if !key.is_empty() => Ok(true),
+        _ => Ok(false)
+    }
+}
+
+#[tauri::command]
 async fn stream_to_llm(app: tauri::AppHandle, request: StreamingRequest) -> Result<String, String> {
     let api_key = std::env::var("OPENAI_API_KEY")
         .map_err(|_| "OpenAI API key not found in environment variables")?;
@@ -319,7 +327,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_websocket::init())
-        .invoke_handler(tauri::generate_handler![open_file, save_file, save_file_as, send_to_llm, stream_to_llm])
+        .invoke_handler(tauri::generate_handler![open_file, save_file, save_file_as, send_to_llm, stream_to_llm, check_api_key_status])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
