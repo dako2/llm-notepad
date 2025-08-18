@@ -242,3 +242,14 @@ body {
 .app.light .menu-items select:hover {
   background-color: rgba(0, 0, 0, 0.05);
 }
+
+.ghost-text-decoration {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.ghost-text-inline {
+  color: #888;
+  opacity: 0.6;
+  font-style: italic;
+}
